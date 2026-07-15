@@ -10,3 +10,5 @@ langsmith
 sentence-transformers
 faiss-cpu
 pypdf
+torch
+torchvision
