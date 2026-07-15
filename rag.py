@@ -83,6 +83,17 @@ embeddings = HuggingFaceEmbeddings(
 )
 
 
+# Debug
+print("Documents loaded:", len(documents))
+print("Chunks created:", len(chunks))
+
+if len(chunks) == 0:
+    raise Exception("No chunks were created!")
+
+print("Testing embedding model...")
+test_embedding = embeddings.embed_query("hello")
+print("Embedding dimension:", len(test_embedding))
+
 # Create FAISS vector database
 vectorstore = FAISS.from_documents(
     documents=chunks,
