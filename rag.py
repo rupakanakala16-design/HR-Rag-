@@ -52,11 +52,20 @@ except Exception:
 
 
 # Load HR PDF documents
-loader = PyPDFDirectoryLoader(CORPUS_PATH)
+import os
 
+print("Current working directory:", os.getcwd())
+print("Files in project:", os.listdir("."))
+
+if os.path.exists("data"):
+    print("Files in data:", os.listdir("data"))
+else:
+    print("data folder not found!")
+
+loader = PyPDFDirectoryLoader("data")
 documents = loader.load()
+
 print("Documents loaded:", len(documents))
-print("Corpus path:", CORPUS_PATH)
 
 
 # Split documents into chunks
