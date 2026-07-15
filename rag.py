@@ -63,9 +63,15 @@ else:
     print("data folder not found!")
 
 loader = PyPDFDirectoryLoader("data")
-documents = loader.load()
+import os
 
+print("Current directory:", os.getcwd())
+print("Data folder exists:", os.path.exists("data"))
+print("Files in data:", os.listdir("data") if os.path.exists("data") else "No data folder")documents = loader.load()
 print("Documents loaded:", len(documents))
+for doc in documents:
+    print(doc.metadata)
+
 
 
 # Split documents into chunks
