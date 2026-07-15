@@ -55,6 +55,8 @@ except Exception:
 loader = PyPDFDirectoryLoader(CORPUS_PATH)
 
 documents = loader.load()
+print("Documents loaded:", len(documents))
+print("Corpus path:", CORPUS_PATH)
 
 
 # Split documents into chunks
