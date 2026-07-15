@@ -1,5 +1,6 @@
 import os
 
+import streamlit as st
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFDirectoryLoader
 from langchain_community.vectorstores import FAISS
@@ -13,144 +14,154 @@ from langsmith import traceable
 # Configuration
 LLM_PROVIDER = "groq"
 LLM_MODEL = "llama-3.3-70b-versatile"
-CORPUS_PATH = "data"
+
+# Resolve "data" relative to THIS file, not the process's current working
+# directory. Streamlit Cloud can launch the app from a different CWD than
+# the repo root, which silently breaks a bare relative path like "data".
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CORPUS_PATH = os.path.join(BASE_DIR, "data")
 
 
-# Load API keys
-try:
-    from kaggle_secrets import UserSecretsClient
+def _setup_environment():
+    """Populate os.environ with API keys from whichever secret store
+    is available: Kaggle secrets, Streamlit secrets, or a local .env file.
+    """
 
-    secrets = UserSecretsClient()
+    # Kaggle notebooks
+    try:
+        from kaggle_secrets import UserSecretsClient
 
-    if LLM_PROVIDER == "groq":
-        os.environ["GROQ_API_KEY"] = secrets.get_secret(
-            "GROQ_API_KEY"
+        secrets = UserSecretsClient()
+
+        if LLM_PROVIDER == "groq":
+            os.environ["GROQ_API_KEY"] = secrets.get_secret("GROQ_API_KEY")
+        elif LLM_PROVIDER == "gemini":
+            os.environ["GOOGLE_API_KEY"] = secrets.get_secret("GOOGLE_API_KEY")
+        elif LLM_PROVIDER == "openai":
+            os.environ["OPENAI_API_KEY"] = secrets.get_secret("OPENAI_API_KEY")
+
+        os.environ["LANGCHAIN_API_KEY"] = secrets.get_secret("LANGCHAIN_API_KEY")
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_PROJECT"] = "zyro-rag-challenge"
+        return
+    except Exception:
+        pass
+
+    # Streamlit Cloud: keys live in st.secrets (Settings -> Secrets), not a
+    # committed .env file (which is normally gitignored and won't deploy).
+    try:
+        if hasattr(st, "secrets") and len(st.secrets) > 0:
+            for key in (
+                "GROQ_API_KEY",
+                "GOOGLE_API_KEY",
+                "OPENAI_API_KEY",
+                "LANGCHAIN_API_KEY",
+            ):
+                if key in st.secrets:
+                    os.environ[key] = st.secrets[key]
+
+            os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+            os.environ.setdefault("LANGCHAIN_PROJECT", "zyro-rag-challenge")
+            return
+    except Exception:
+        pass
+
+    # Local development
+    load_dotenv()
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_PROJECT", "zyro-rag-challenge")
+
+
+def _load_documents():
+    if not os.path.exists(CORPUS_PATH):
+        raise FileNotFoundError(
+            f"Data folder not found at '{CORPUS_PATH}'. Make sure a "
+            f"'data' folder containing your HR PDFs is committed to the "
+            f"repo (check .gitignore) and sits next to rag.py."
         )
 
+    pdf_files = [f for f in os.listdir(CORPUS_PATH) if f.lower().endswith(".pdf")]
+
+    if not pdf_files:
+        raise FileNotFoundError(
+            f"'{CORPUS_PATH}' exists but contains no PDF files. Add at "
+            f"least one .pdf and make sure it's actually committed to git "
+            f"(not just present locally)."
+        )
+
+    loader = PyPDFDirectoryLoader(CORPUS_PATH)
+    documents = loader.load()
+
+    if not documents:
+        raise ValueError(
+            f"Found {len(pdf_files)} PDF file(s) in '{CORPUS_PATH}' but "
+            f"none could be loaded. They may be corrupted or password "
+            f"protected."
+        )
+
+    return documents
+
+
+@st.cache_resource(show_spinner=False)
+def _build_pipeline():
+    """Build (and cache across reruns) the retriever + LLM.
+
+    Streamlit reruns the whole script on every interaction. Without
+    caching, this function's contents would re-load PDFs, re-embed, and
+    re-build the FAISS index on every single button click.
+    """
+
+    _setup_environment()
+
+    documents = _load_documents()
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=150,
+    )
+    chunks = splitter.split_documents(documents)
+
+    if len(chunks) == 0:
+        raise ValueError(
+            f"Loaded {len(documents)} document page(s) from '{CORPUS_PATH}' "
+            f"but they produced zero text chunks. This usually means the "
+            f"PDFs are scanned images with no selectable text (pypdf can't "
+            f"OCR them) — try re-exporting them as text-based PDFs, or run "
+            f"them through an OCR step first."
+        )
+
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    vectorstore = FAISS.from_documents(documents=chunks, embedding=embeddings)
+
+    retriever = vectorstore.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": 6},
+    )
+
+    if LLM_PROVIDER == "groq":
+        from langchain_groq import ChatGroq
+
+        llm = ChatGroq(model=LLM_MODEL, temperature=0.1, max_tokens=512)
+
     elif LLM_PROVIDER == "gemini":
-        os.environ["GOOGLE_API_KEY"] = secrets.get_secret(
-            "GOOGLE_API_KEY"
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        llm = ChatGoogleGenerativeAI(
+            model=LLM_MODEL, temperature=0.1, max_output_tokens=512
         )
 
     elif LLM_PROVIDER == "openai":
-        os.environ["OPENAI_API_KEY"] = secrets.get_secret(
-            "OPENAI_API_KEY"
-        )
+        from langchain_openai import ChatOpenAI
 
-    os.environ["LANGCHAIN_API_KEY"] = secrets.get_secret(
-        "LANGCHAIN_API_KEY"
-    )
+        llm = ChatOpenAI(model=LLM_MODEL, temperature=0.1, max_tokens=512)
 
-    os.environ["LANGCHAIN_TRACING_V2"] = "true"
-    os.environ["LANGCHAIN_PROJECT"] = "zyro-rag-challenge"
+    else:
+        raise ValueError("Unsupported LLM provider.")
 
-except Exception:
-    load_dotenv()
-
-    os.environ["LANGCHAIN_TRACING_V2"] = "true"
-    os.environ["LANGCHAIN_PROJECT"] = "zyro-rag-challenge"
-
-# Load HR PDF documents
-from pathlib import Path
-import os
-
-print("Current working directory:", os.getcwd())
-print("Files in project:", os.listdir("."))
-
-DATA_PATH = Path(__file__).parent / CORPUS_PATH
-
-print("Data path:", DATA_PATH)
-print("Exists:", DATA_PATH.exists())
-
-if DATA_PATH.exists():
-    print("Files in data:", os.listdir(DATA_PATH))
-else:
-    print("Data folder not found!")
-
-loader = PyPDFDirectoryLoader(str(DATA_PATH))
-documents = loader.load()
-
-print("Documents loaded:", len(documents))
-# Split documents into chunks
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=800,
-    chunk_overlap=150,
-)
-
-chunks = splitter.split_documents(documents)
-
-
-# Create embeddings
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
-
-
-# Debug
-print("Documents loaded:", len(documents))
-print("Chunks created:", len(chunks))
-
-if len(chunks) == 0:
-    raise Exception("No chunks were created!")
-
-print("Testing embedding model...")
-test_embedding = embeddings.embed_query("hello")
-print("Embedding dimension:", len(test_embedding))
-
-# Create FAISS vector database
-vectorstore = FAISS.from_documents(
-    documents=chunks,
-    embedding=embeddings
-)
-
-
-# Create retriever
-retriever = vectorstore.as_retriever(
-    search_type="similarity",
-    search_kwargs={
-        "k": 6
-    }
-)
-
-
-# Initialize Groq LLM
-if LLM_PROVIDER == "groq":
-
-    from langchain_groq import ChatGroq
-
-    llm = ChatGroq(
-        model=LLM_MODEL,
-        temperature=0.1,
-        max_tokens=512
-    )
-
-elif LLM_PROVIDER == "gemini":
-
-    from langchain_google_genai import (
-        ChatGoogleGenerativeAI
-    )
-
-    llm = ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        temperature=0.1,
-        max_output_tokens=512
-    )
-
-elif LLM_PROVIDER == "openai":
-
-    from langchain_openai import ChatOpenAI
-
-    llm = ChatOpenAI(
-        model=LLM_MODEL,
-        temperature=0.1,
-        max_tokens=512
-    )
-
-else:
-
-    raise ValueError(
-        "Unsupported LLM provider."
-    )
+    return retriever, llm
 
 
 # RAG prompt
@@ -202,6 +213,8 @@ def format_docs(docs):
 @traceable
 def rag_chain(question: str):
 
+    retriever, llm = _build_pipeline()
+
     docs = retriever.invoke(question)
 
     context = format_docs(docs)
@@ -232,6 +245,8 @@ REFUSAL_MESSAGE = (
 # Main chatbot function
 @traceable
 def ask_bot(question: str):
+
+    retriever, _ = _build_pipeline()
 
     answer = rag_chain(question)
 
