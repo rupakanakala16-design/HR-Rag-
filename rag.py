@@ -51,26 +51,26 @@ except Exception:
     os.environ["LANGCHAIN_PROJECT"] = "zyro-rag-challenge"
 
 # Load HR PDF documents
+from pathlib import Path
 import os
 
 print("Current working directory:", os.getcwd())
 print("Files in project:", os.listdir("."))
 
-if os.path.exists("data"):
-    print("Files in data:", os.listdir("data"))
-else:
-    print("data folder not found!")
+DATA_PATH = Path(__file__).parent / CORPUS_PATH
 
-loader = PyPDFDirectoryLoader("data")
+print("Data path:", DATA_PATH)
+print("Exists:", DATA_PATH.exists())
+
+if DATA_PATH.exists():
+    print("Files in data:", os.listdir(DATA_PATH))
+else:
+    print("Data folder not found!")
+
+loader = PyPDFDirectoryLoader(str(DATA_PATH))
 documents = loader.load()
 
 print("Documents loaded:", len(documents))
-
-for doc in documents:
-    print(doc.metadata)
-
-
-
 # Split documents into chunks
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=800,
