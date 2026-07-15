@@ -50,7 +50,6 @@ except Exception:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_PROJECT"] = "zyro-rag-challenge"
 
-
 # Load HR PDF documents
 import os
 
@@ -63,12 +62,10 @@ else:
     print("data folder not found!")
 
 loader = PyPDFDirectoryLoader("data")
-import os
+documents = loader.load()
 
-print("Current directory:", os.getcwd())
-print("Data folder exists:", os.path.exists("data"))
-print("Files in data:", os.listdir("data") if os.path.exists("data") else "No data folder")documents = loader.load()
 print("Documents loaded:", len(documents))
+
 for doc in documents:
     print(doc.metadata)
 
